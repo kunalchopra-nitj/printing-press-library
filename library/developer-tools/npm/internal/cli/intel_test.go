@@ -114,6 +114,7 @@ func TestRiskCommandFlagsDeprecatedPackage(t *testing.T) {
 func TestPackageSummaryReturnsDownloadError(t *testing.T) {
 	withMockNPM(t, func() {
 		serverURL := os.Getenv("NPM_BASE_URL")
+		downloadsURL := os.Getenv("NPM_DOWNLOADS_BASE_URL")
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			if r.URL.Path == "/left-pad" {
@@ -130,6 +131,8 @@ func TestPackageSummaryReturnsDownloadError(t *testing.T) {
 		defer server.Close()
 		t.Setenv("NPM_BASE_URL", server.URL)
 		defer t.Setenv("NPM_BASE_URL", serverURL)
+		t.Setenv("NPM_DOWNLOADS_BASE_URL", server.URL)
+		defer t.Setenv("NPM_DOWNLOADS_BASE_URL", downloadsURL)
 
 		root := RootCmd()
 		root.SetOut(&bytes.Buffer{})
@@ -139,6 +142,48 @@ func TestPackageSummaryReturnsDownloadError(t *testing.T) {
 			t.Fatal("expected package command to return download lookup error")
 		}
 	})
+}
+
+func TestPackageSummarySkipsDownloadsForCustomRegistry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/private-lib" {
+			_, _ = w.Write([]byte(`{
+				"name":"private-lib",
+				"description":"Internal package",
+				"dist-tags":{"latest":"1.0.0"},
+				"license":"MIT",
+				"maintainers":[{"name":"team"}],
+				"versions":{"1.0.0":{"dependencies":{}}},
+				"time":{"1.0.0":"2026-05-01T00:00:00.000Z"}
+			}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	t.Setenv("NPM_BASE_URL", server.URL)
+	t.Setenv("NPM_DOWNLOADS_BASE_URL", "")
+	t.Setenv("NPM_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
+	t.Setenv("HOME", t.TempDir())
+
+	var out bytes.Buffer
+	root := RootCmd()
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"package", "private-lib", "--json", "--no-cache"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute package: %v", err)
+	}
+
+	var got packageSummary
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, out.String())
+	}
+	if got.Name != "private-lib" || got.LastMonthDownloads != 0 {
+		t.Fatalf("unexpected package summary: %+v", got)
+	}
 }
 
 func withMockNPM(t *testing.T, run func()) {
@@ -190,6 +235,7 @@ func withMockNPM(t *testing.T, run func()) {
 	defer server.Close()
 
 	t.Setenv("NPM_BASE_URL", server.URL)
+	t.Setenv("NPM_DOWNLOADS_BASE_URL", server.URL)
 	t.Setenv("NPM_CONFIG", filepath.Join(t.TempDir(), "config.toml"))
 	t.Setenv("HOME", t.TempDir())
 	oldArgs := os.Args

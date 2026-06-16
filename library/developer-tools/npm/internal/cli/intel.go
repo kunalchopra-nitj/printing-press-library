@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -191,17 +192,19 @@ func fetchPackageDocument(c *client.Client, name string) (npmPackageDocument, er
 }
 
 func fetchLastMonthDownloads(c *client.Client, name string) (int, error) {
-	downloadClient := c
-	if strings.TrimRight(c.BaseURL, "/") == "https://registry.npmjs.org" {
-		cfg := config.Config{BaseURL: "https://api.npmjs.org"}
-		if c.Config != nil {
-			cfg = *c.Config
-			cfg.BaseURL = "https://api.npmjs.org"
-		}
-		downloadClient = client.New(&cfg, c.ConfiguredTimeout(), c.RateLimit())
-		downloadClient.DryRun = c.DryRun
-		downloadClient.NoCache = c.NoCache
+	downloadBaseURL := os.Getenv("NPM_DOWNLOADS_BASE_URL")
+	if downloadBaseURL == "" && !isDefaultNPMRegistry(c.BaseURL) {
+		return 0, nil
 	}
+	downloadBaseURL = firstNonEmpty(downloadBaseURL, "https://api.npmjs.org")
+	cfg := config.Config{BaseURL: downloadBaseURL}
+	if c.Config != nil {
+		cfg = *c.Config
+		cfg.BaseURL = downloadBaseURL
+	}
+	downloadClient := client.New(&cfg, c.ConfiguredTimeout(), c.RateLimit())
+	downloadClient.DryRun = c.DryRun
+	downloadClient.NoCache = c.NoCache
 	data, err := downloadClient.Get("/downloads/point/last-month/"+escapePackageName(name), nil)
 	if err != nil {
 		return 0, err
@@ -211,6 +214,10 @@ func fetchLastMonthDownloads(c *client.Client, name string) (int, error) {
 		return 0, fmt.Errorf("decoding npm downloads for %s: %w", name, err)
 	}
 	return point.Downloads, nil
+}
+
+func isDefaultNPMRegistry(baseURL string) bool {
+	return strings.TrimRight(baseURL, "/") == "https://registry.npmjs.org"
 }
 
 func scorePackageRisk(summary packageSummary) packageRisk {
