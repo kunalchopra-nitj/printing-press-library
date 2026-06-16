@@ -87,6 +87,30 @@ func TestRiskCommandFlagsStaleAndMissingLicense(t *testing.T) {
 	})
 }
 
+func TestRiskCommandFlagsDeprecatedPackage(t *testing.T) {
+	withMockNPM(t, func() {
+		var out bytes.Buffer
+		root := RootCmd()
+		root.SetOut(&out)
+		root.SetErr(&bytes.Buffer{})
+		root.SetArgs([]string{"risk", "request", "--json", "--no-cache"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("execute risk: %v", err)
+		}
+
+		var got packageRisk
+		if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+			t.Fatalf("decode output: %v\n%s", err, out.String())
+		}
+		if got.Level != "high" || !got.Summary.Deprecated {
+			t.Fatalf("deprecated package should be high risk: %+v", got)
+		}
+		if !strings.Contains(strings.Join(got.Signals, " "), "deprecated") {
+			t.Fatalf("expected deprecated signal, got %+v", got.Signals)
+		}
+	})
+}
+
 func TestPackageSummaryReturnsDownloadError(t *testing.T) {
 	withMockNPM(t, func() {
 		serverURL := os.Getenv("NPM_BASE_URL")
@@ -135,17 +159,30 @@ func withMockNPM(t *testing.T, run func()) {
 			}`))
 		case "/tiny-lib":
 			_, _ = w.Write([]byte(`{
-				"name":"tiny-lib",
+					"name":"tiny-lib",
 				"description":"Tiny library",
 				"dist-tags":{"latest":"0.1.0"},
 				"maintainers":[],
-				"versions":{"0.1.0":{"dependencies":{}}},
-				"time":{"0.1.0":"2021-01-01T00:00:00.000Z"}
-			}`))
+					"versions":{"0.1.0":{"dependencies":{}}},
+					"time":{"0.1.0":"2021-01-01T00:00:00.000Z"}
+				}`))
+		case "/request":
+			_, _ = w.Write([]byte(`{
+					"name":"request",
+					"description":"Simplified HTTP request client",
+					"dist-tags":{"latest":"2.88.2"},
+					"license":"Apache-2.0",
+					"maintainers":[{"name":"alice"},{"name":"bob"}],
+					"deprecated":"request has been deprecated, see alternatives",
+					"versions":{"2.88.2":{"dependencies":{}}},
+					"time":{"2.88.2":"2025-01-01T00:00:00.000Z"}
+				}`))
 		case "/downloads/point/last-month/left-pad":
 			_, _ = w.Write([]byte(`{"downloads":123456,"package":"left-pad"}`))
 		case "/downloads/point/last-month/tiny-lib":
 			_, _ = w.Write([]byte(`{"downloads":17,"package":"tiny-lib"}`))
+		case "/downloads/point/last-month/request":
+			_, _ = w.Write([]byte(`{"downloads":50000000,"package":"request"}`))
 		default:
 			http.NotFound(w, r)
 		}

@@ -24,6 +24,8 @@ type packageSummary struct {
 	DependencyCount    int      `json:"dependency_count"`
 	LastPublishTime    string   `json:"last_publish_time,omitempty"`
 	LastMonthDownloads int      `json:"last_month_downloads"`
+	Deprecated         bool     `json:"deprecated,omitempty"`
+	DeprecationMessage string   `json:"deprecation_message,omitempty"`
 	URL                string   `json:"url"`
 }
 
@@ -154,6 +156,7 @@ func fetchPackageSummary(c *client.Client, name string) (packageSummary, error) 
 	latestVersion := doc.Versions[latest]
 	license := firstNonEmpty(doc.License, latestVersion.License)
 	lastPublishTime := doc.Time[latest]
+	deprecationMessage := firstNonEmpty(deprecationText(doc.Deprecated), deprecationText(latestVersion.Deprecated))
 	downloads, err := fetchLastMonthDownloads(c, name)
 	if err != nil {
 		return packageSummary{}, err
@@ -168,6 +171,8 @@ func fetchPackageSummary(c *client.Client, name string) (packageSummary, error) 
 		DependencyCount:    len(latestVersion.Dependencies),
 		LastPublishTime:    lastPublishTime,
 		LastMonthDownloads: downloads,
+		Deprecated:         deprecationMessage != "",
+		DeprecationMessage: deprecationMessage,
 		URL:                "https://www.npmjs.com/package/" + name,
 	}, nil
 }
@@ -211,6 +216,14 @@ func fetchLastMonthDownloads(c *client.Client, name string) (int, error) {
 func scorePackageRisk(summary packageSummary) packageRisk {
 	score := 0
 	signals := []string{}
+	if summary.Deprecated {
+		score += 60
+		signal := "deprecated"
+		if summary.DeprecationMessage != "" {
+			signal += ": " + summary.DeprecationMessage
+		}
+		signals = append(signals, signal)
+	}
 	if strings.TrimSpace(summary.License) == "" {
 		score += 25
 		signals = append(signals, "missing license")
@@ -254,6 +267,18 @@ func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
 			return value
+		}
+	}
+	return ""
+}
+
+func deprecationText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case bool:
+		if typed {
+			return "deprecated"
 		}
 	}
 	return ""
