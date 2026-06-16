@@ -272,9 +272,9 @@ func TestUpsertBatch_PopulatesDownloadsTable(t *testing.T) {
 	defer s.Close()
 
 	items := []json.RawMessage{
-		json.RawMessage(`{"id": "test-001"}`),
-		json.RawMessage(`{"id": "test-002"}`),
-		json.RawMessage(`{"id": "test-003"}`),
+		json.RawMessage(`{"id": "test-001", "versions_id": "1.0.0"}`),
+		json.RawMessage(`{"id": "test-002", "versions_id": "1.0.1"}`),
+		json.RawMessage(`{"id": "test-003", "versions_id": "1.0.2"}`),
 	}
 	if _, _, err := s.UpsertBatch("downloads", items); err != nil {
 		t.Fatalf("UpsertBatch: %v", err)
@@ -314,9 +314,9 @@ func TestUpsertBatch_PopulatesLastWeekTable(t *testing.T) {
 	defer s.Close()
 
 	items := []json.RawMessage{
-		json.RawMessage(`{"id": "test-001"}`),
-		json.RawMessage(`{"id": "test-002"}`),
-		json.RawMessage(`{"id": "test-003"}`),
+		json.RawMessage(`{"id": "test-001", "versions_id": "1.0.0"}`),
+		json.RawMessage(`{"id": "test-002", "versions_id": "1.0.1"}`),
+		json.RawMessage(`{"id": "test-003", "versions_id": "1.0.2"}`),
 	}
 	if _, _, err := s.UpsertBatch("last_week", items); err != nil {
 		t.Fatalf("UpsertBatch: %v", err)
@@ -339,5 +339,59 @@ func TestUpsertBatch_PopulatesLastWeekTable(t *testing.T) {
 	}
 	if typed != len(items) {
 		t.Fatalf("last_week count = %d, want %d (typed table not populated by UpsertBatch)", typed, len(items))
+	}
+}
+
+func TestUpsertBatch_LastWeekPersistsVersionsID(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "data.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	item := json.RawMessage(`{"id":"left-pad","versions_id":"1.3.0"}`)
+	if _, _, err := s.UpsertBatch("last_week", []json.RawMessage{item}); err != nil {
+		t.Fatalf("UpsertBatch: %v", err)
+	}
+
+	var versionsID string
+	if err := s.DB().QueryRow(`SELECT versions_id FROM last_week WHERE id = ?`, "left-pad").Scan(&versionsID); err != nil {
+		t.Fatalf("select versions_id: %v", err)
+	}
+	if versionsID != "1.3.0" {
+		t.Fatalf("versions_id = %q, want %q", versionsID, "1.3.0")
+	}
+}
+
+func TestListIDsUsesWhitelistForDomainTables(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "data.db")
+	s, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	if _, _, err := s.UpsertBatch("downloads", []json.RawMessage{json.RawMessage(`{"id":"download-1"}`)}); err != nil {
+		t.Fatalf("upsert downloads: %v", err)
+	}
+	if err := s.Upsert("resources WHERE 1=1 UNION SELECT data FROM resources --", "safe-id", json.RawMessage(`{"id":"safe-id"}`)); err != nil {
+		t.Fatalf("upsert generic malicious resource: %v", err)
+	}
+
+	ids, err := s.ListIDs("downloads")
+	if err != nil {
+		t.Fatalf("ListIDs(downloads): %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "download-1" {
+		t.Fatalf("downloads IDs = %v, want [download-1]", ids)
+	}
+
+	ids, err = s.ListIDs("resources WHERE 1=1 UNION SELECT data FROM resources --")
+	if err != nil {
+		t.Fatalf("ListIDs(malicious): %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "safe-id" {
+		t.Fatalf("generic fallback IDs = %v, want [safe-id]", ids)
 	}
 }

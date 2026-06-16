@@ -87,6 +87,36 @@ func TestRiskCommandFlagsStaleAndMissingLicense(t *testing.T) {
 	})
 }
 
+func TestPackageSummaryReturnsDownloadError(t *testing.T) {
+	withMockNPM(t, func() {
+		serverURL := os.Getenv("NPM_BASE_URL")
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/left-pad" {
+				_, _ = w.Write([]byte(`{
+					"name":"left-pad",
+					"dist-tags":{"latest":"1.3.0"},
+					"versions":{"1.3.0":{}},
+					"time":{"1.3.0":"2026-05-01T00:00:00.000Z"}
+				}`))
+				return
+			}
+			http.Error(w, "downloads unavailable", http.StatusInternalServerError)
+		}))
+		defer server.Close()
+		t.Setenv("NPM_BASE_URL", server.URL)
+		defer t.Setenv("NPM_BASE_URL", serverURL)
+
+		root := RootCmd()
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&bytes.Buffer{})
+		root.SetArgs([]string{"package", "left-pad", "--json", "--no-cache"})
+		if err := root.Execute(); err == nil {
+			t.Fatal("expected package command to return download lookup error")
+		}
+	})
+}
+
 func withMockNPM(t *testing.T, run func()) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

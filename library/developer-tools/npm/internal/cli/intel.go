@@ -154,7 +154,10 @@ func fetchPackageSummary(c *client.Client, name string) (packageSummary, error) 
 	latestVersion := doc.Versions[latest]
 	license := firstNonEmpty(doc.License, latestVersion.License)
 	lastPublishTime := doc.Time[latest]
-	downloads, _ := fetchLastMonthDownloads(c, name)
+	downloads, err := fetchLastMonthDownloads(c, name)
+	if err != nil {
+		return packageSummary{}, err
+	}
 	return packageSummary{
 		Name:               firstNonEmpty(doc.Name, name),
 		LatestVersion:      latest,

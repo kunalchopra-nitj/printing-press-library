@@ -604,6 +604,7 @@ func sqliteFieldValue(v any) any {
 func lookupFieldValue(obj map[string]any, snakeKey string) any {
 	return LookupFieldValue(obj, snakeKey)
 }
+
 // upsertDownloadsTx writes the typed-table portion of a downloads upsert
 // inside an existing transaction. The caller is responsible for the generic
 // resources insert (via upsertGenericResourceTx) and for committing the tx.
@@ -657,6 +658,7 @@ func (s *Store) UpsertDownloads(data json.RawMessage) error {
 
 	return tx.Commit()
 }
+
 // upsertLastWeekTx writes the typed-table portion of a last_week upsert
 // inside an existing transaction. The caller is responsible for the generic
 // resources insert (via upsertGenericResourceTx) and for committing the tx.
@@ -668,9 +670,9 @@ func (s *Store) upsertLastWeekTx(tx *sql.Tx, id string, obj map[string]any, data
 		 VALUES (?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET versions_id = excluded.versions_id, data = excluded.data, synced_at = excluded.synced_at`,
 		id,
+		lookupFieldValue(obj, "versions_id"),
 		string(data),
 		time.Now(),
-		lookupFieldValue(obj, "versions_id"),
 	); err != nil {
 		return fmt.Errorf("insert into last_week: %w", err)
 	}
@@ -717,8 +719,7 @@ func (s *Store) UpsertLastWeek(data json.RawMessage) error {
 // Includes both flat resources and dependent (parent-child) resources so a
 // child path-item annotated with x-resource-id resolves the same as a flat
 // path-item.
-var resourceIDFieldOverrides = map[string]string{
-}
+var resourceIDFieldOverrides = map[string]string{}
 
 // genericIDFieldFallbacks is the runtime safety net for resources that did
 // NOT receive a templated IDField. API-specific names belong in spec
@@ -864,17 +865,35 @@ func (s *Store) GetSyncCursor(resourceType string) string {
 // resources table if no domain table exists. Used by dependent sync to iterate parents.
 func (s *Store) ListIDs(resourceType string) ([]string, error) {
 	// Try domain table first (tables are named after the resource type)
-	query := fmt.Sprintf("SELECT id FROM %s", resourceType)
-	rows, err := s.db.Query(query)
-	if err != nil {
-		// Fall back to generic resources table
-		rows, err = s.db.Query("SELECT id FROM resources WHERE resource_type = ?", resourceType)
+	if table, ok := domainTableForResourceType(resourceType); ok {
+		rows, err := s.db.Query(fmt.Sprintf(`SELECT id FROM "%s"`, table))
 		if err != nil {
 			return nil, err
 		}
+		defer rows.Close()
+		return scanIDs(rows)
+	}
+
+	rows, err := s.db.Query("SELECT id FROM resources WHERE resource_type = ?", resourceType)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
+	return scanIDs(rows)
+}
 
+func domainTableForResourceType(resourceType string) (string, bool) {
+	switch resourceType {
+	case "downloads":
+		return "downloads", true
+	case "last_week":
+		return "last_week", true
+	default:
+		return "", false
+	}
+}
+
+func scanIDs(rows *sql.Rows) ([]string, error) {
 	var ids []string
 	for rows.Next() {
 		var id string
